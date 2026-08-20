@@ -148,10 +148,19 @@
   // 2) The referrer (the page that embedded this one) must belong to our domain
   var referrerOk = document.referrer && document.referrer.indexOf(ALLOWED_HOST) !== -1;
 
-  if(!inIframe || !referrerOk){
+  // 3) The Thinkific account email must be present in the URL (passed via Liquid in the
+  //    lesson's iframe: ?email={{ user.email | url_encode }}) — this proves who is really
+  //    logged in on Thinkific, and can't be spoofed by editing the PTIN field.
+  var params = new URLSearchParams(window.location.search);
+  var thinkificEmail = (params.get('email') || '').trim().toLowerCase();
+
+  if(!inIframe || !referrerOk || !thinkificEmail){
     blockAccess();
     return; // stop here — don't wire up the rest of the exam
   }
+
+  window.__AFTR_EMAIL__ = thinkificEmail;
+  window.__AFTR_BLOCK__ = blockAccess;
 })();
 </script>
 
@@ -262,7 +271,7 @@
 <div id="screen-locked" class="screen">
   <div class="card">
     <div class="card-title">Examen Ya Completado</div>
-    <div class="card-sub" id="locked-msg" style="margin-bottom:0">Nuestros registros muestran que este PTIN ya completó el Examen Final AFTR. Solo se permite <strong>un intento</strong>, por lo que el examen no se puede volver a tomar.</div>
+    <div class="card-sub" id="locked-msg" style="margin-bottom:0">Nuestros registros muestran que esta cuenta de Thinkific ya completó el Examen Final AFTR. Solo se permite <strong>un intento</strong> por cuenta, por lo que el examen no se puede volver a tomar.</div>
   </div>
 </div>
 
@@ -397,7 +406,7 @@ const QUESTION_BANK = [
 // ══════════════════════════════════════════════════════
 //  STATE
 // ══════════════════════════════════════════════════════
-let studentName="",studentPTIN="",shuffledQ=[],answers={},timerInt=null,secondsLeft=EXAM_DURATION_SECONDS,examSubmitted=false,examEndTime=0;
+let studentName="",studentPTIN="",studentEmail="",shuffledQ=[],answers={},timerInt=null,secondsLeft=EXAM_DURATION_SECONDS,examSubmitted=false,examEndTime=0;
 const SESSION_PREFIX="AFTR_SESSION_",CURRENT_KEY="AFTR_CURRENT";
 
 function shuffle(arr){const a=[...arr];for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]]}return a}
@@ -405,24 +414,25 @@ function formatTime(s){const h=Math.floor(s/3600),m=Math.floor((s%3600)/60),sc=s
 function formatUsed(s){const u=EXAM_DURATION_SECONDS-s,h=Math.floor(u/3600),m=Math.floor((u%3600)/60),sc=u%60;return h>0?`${h}h ${m}m ${sc}s`:m>0?`${m}m ${sc}s`:`${sc}s`}
 function showScreen(id){document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));document.getElementById(id).classList.add('active')}
 
-// ── Single-attempt persistence: keeps the timer running across reloads / navigation ──
-function sessionKey(ptin){return SESSION_PREFIX+ptin}
+// ── Single-attempt persistence, keyed by the verified Thinkific account email ──
+// (not the PTIN — a typed PTIN can be changed by the student, the Thinkific login email cannot)
+function sessionKey(email){return SESSION_PREFIX+email}
 function saveSession(){
-  if(!studentPTIN)return;
-  try{localStorage.setItem(sessionKey(studentPTIN),JSON.stringify({
-    name:studentName,ptin:studentPTIN,endTime:examEndTime,
+  if(!studentEmail)return;
+  try{localStorage.setItem(sessionKey(studentEmail),JSON.stringify({
+    name:studentName,ptin:studentPTIN,email:studentEmail,endTime:examEndTime,
     questions:shuffledQ,answers:answers,submitted:examSubmitted
   }));}catch(e){}
 }
-function loadSession(ptin){
-  try{const raw=localStorage.getItem(sessionKey(ptin));return raw?JSON.parse(raw):null;}catch(e){return null;}
+function loadSession(email){
+  try{const raw=localStorage.getItem(sessionKey(email));return raw?JSON.parse(raw):null;}catch(e){return null;}
 }
 function showLocked(){
   showScreen('screen-locked');window.scrollTo(0,0);
   const td=document.getElementById('timer-display');td.style.display='none';td.className='';
 }
 function resumeSession(s){
-  studentName=s.name;studentPTIN=s.ptin;shuffledQ=s.questions||[];answers=s.answers||{};
+  studentName=s.name;studentPTIN=s.ptin;studentEmail=s.email||studentEmail;shuffledQ=s.questions||[];answers=s.answers||{};
   examEndTime=s.endTime;examSubmitted=false;
   document.getElementById('display-name').textContent=studentName;
   document.getElementById('display-ptin').textContent=studentPTIN;
@@ -445,17 +455,19 @@ window.addEventListener('DOMContentLoaded',()=>{
 function startExam(){
   const nEl=document.getElementById('input-name'),pEl=document.getElementById('input-ptin');
   studentName=nEl.value.trim();studentPTIN=pEl.value.trim().toUpperCase();
+  studentEmail=window.__AFTR_EMAIL__||"";
   nEl.classList.remove('error');pEl.classList.remove('error');
   let ok=true;
   if(!studentName){nEl.classList.add('error');ok=false}
   if(!studentPTIN){pEl.classList.add('error');ok=false}
+  if(!studentEmail){window.__AFTR_BLOCK__();return;}
   if(!ok)return;
-  // Single-attempt enforcement
-  const existing=loadSession(studentPTIN);
+  // Single-attempt enforcement — keyed by the verified Thinkific email, not the typed PTIN.
+  const existing=loadSession(studentEmail);
   if(existing){
     if(existing.submitted){showLocked();return;}
-    // An unfinished attempt exists for this PTIN — resume it, do NOT restart the clock.
-    localStorage.setItem(CURRENT_KEY,studentPTIN);
+    // An unfinished attempt exists for this account — resume it, do NOT restart the clock.
+    localStorage.setItem(CURRENT_KEY,studentEmail);
     resumeSession(existing);return;
   }
   document.getElementById('display-name').textContent=studentName;
@@ -548,7 +560,7 @@ function submitExam(){
   saveSession();                       // records submitted:true → no second attempt
   localStorage.removeItem(CURRENT_KEY);
   showResults(pct,passed,correct,total,timeUsed,dateStr);
-  sendToSheets(studentName,studentPTIN,pct,passed?'PASSED':'FAILED',correct,total,timeUsed,dateStr);
+  sendToSheets(studentName,studentPTIN,studentEmail,pct,passed?'PASSED':'FAILED',correct,total,timeUsed,dateStr);
 }
 
 function showResults(pct,passed,correct,total,timeUsed,dateStr){
@@ -647,8 +659,8 @@ async function generateCertificate(){
   btn.disabled=false;btn.textContent='Descargar mi Certificado (PDF)';
 }
 
-function sendToSheets(name,ptin,score,status,correct,total,timeUsed,dateStr){
-  const p=new URLSearchParams({name,ptin,score,status,correct,total,timeUsed,date:dateStr});
+function sendToSheets(name,ptin,email,score,status,correct,total,timeUsed,dateStr){
+  const p=new URLSearchParams({name,ptin,email,score,status,correct,total,timeUsed,date:dateStr});
   fetch(`${GOOGLE_SCRIPT_URL}?${p}`,{method:'GET',mode:'no-cors'});
 }
 
