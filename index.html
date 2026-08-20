@@ -452,7 +452,7 @@ window.addEventListener('DOMContentLoaded',()=>{
   if(cur){const s=loadSession(cur);if(s&&!s.submitted){resumeSession(s);}}
 });
 
-function startExam(){
+async function startExam(){
   const nEl=document.getElementById('input-name'),pEl=document.getElementById('input-ptin');
   studentName=nEl.value.trim();studentPTIN=pEl.value.trim().toUpperCase();
   studentEmail=window.__AFTR_EMAIL__||"";
@@ -470,6 +470,23 @@ function startExam(){
     localStorage.setItem(CURRENT_KEY,studentEmail);
     resumeSession(existing);return;
   }
+  // No local record on this browser (e.g. incognito, a different device) — ask the
+  // server (Google Sheet) whether this email already has a completed exam on file.
+  const startBtn=document.querySelector('#screen-register .btn-primary');
+  const startBtnOriginalText=startBtn?startBtn.textContent:'';
+  if(startBtn){startBtn.disabled=true;startBtn.textContent='Verificando...';}
+  try{
+    const res=await fetch(`${GOOGLE_SCRIPT_URL}?checkEmail=${encodeURIComponent(studentEmail)}`);
+    const data=await res.json();
+    if(data && data.completed){
+      if(startBtn){startBtn.disabled=false;startBtn.textContent=startBtnOriginalText;}
+      showLocked();return;
+    }
+  }catch(e){
+    // If the check itself fails (network hiccup), fail open rather than blocking a
+    // legitimate student — the local single-attempt check above still applies.
+  }
+  if(startBtn){startBtn.disabled=false;startBtn.textContent=startBtnOriginalText;}
   document.getElementById('display-name').textContent=studentName;
   document.getElementById('display-ptin').textContent=studentPTIN;
   shuffledQ=shuffle(QUESTION_BANK).map(q=>{
