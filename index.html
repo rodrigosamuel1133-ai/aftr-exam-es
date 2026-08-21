@@ -175,8 +175,12 @@
     <div class="card-title">Examen Final AFTR</div>
     <div class="card-sub">Repaso Fiscal Federal Anual (AFTR) — 100 Preguntas<br>Por favor ingrese su información para comenzar el examen.</div>
     <div class="field">
-      <label>Nombre Completo</label>
-      <input type="text" id="input-name" placeholder="ej. Maria Gonzalez" autocomplete="off">
+      <label>Nombre</label>
+      <input type="text" id="input-first-name" placeholder="ej. Maria" autocomplete="off">
+    </div>
+    <div class="field">
+      <label>Apellido</label>
+      <input type="text" id="input-last-name" placeholder="ej. Gonzalez" autocomplete="off">
     </div>
     <div class="field">
       <label>Número de PTIN</label>
@@ -240,9 +244,10 @@
     <div class="participant-caption">(Participant's Full Legal Name)</div>
     <div class="completion-sentence">Upon successful completion of the course, having fully participated in all required modules and instructional sessions.</div>
     <table class="info-table">
-      <tr><th>Course</th><th>CE Hours</th><th>Format</th><th>Valid For</th><th>Language</th></tr>
+      <tr><th>Course</th><th>Program #</th><th>CE Hours</th><th>Format</th><th>Valid For</th><th>Language</th></tr>
       <tr>
         <td id="cert-course"></td>
+        <td id="cert-program-number"></td>
         <td id="cert-hours"></td>
         <td id="cert-format"></td>
         <td id="cert-validfor"></td>
@@ -296,6 +301,13 @@ const PASS_THRESHOLD = 70;
 
 // ⚠️ Replace with your Google Apps Script Web App URL
 const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzQgNTX6Xsyp_eGzWdHPrcmqrBMJRlMw_1TqfyV30uDhbWVn48IWo3NvKwqENIEUnxNkw/exec";
+
+// ── PROGRAM (CE course) NUMBER ──
+// Set directly in the iframe's URL on Thinkific, e.g.:
+//   .../aftr_exam_ES.html?program=XXXXX-A-00XXX-25-S
+// Falls back to PROGRAM_NUMBER_DEFAULT below if the URL param is missing (e.g. while testing locally).
+const PROGRAM_NUMBER_DEFAULT = "";
+const PROGRAM_NUMBER = (new URLSearchParams(window.location.search).get('program') || PROGRAM_NUMBER_DEFAULT).trim();
 
 // ══════════════════════════════════════════════════════
 //  100 QUESTIONS — AFTR 2026
@@ -406,7 +418,7 @@ const QUESTION_BANK = [
 // ══════════════════════════════════════════════════════
 //  STATE
 // ══════════════════════════════════════════════════════
-let studentName="",studentPTIN="",studentEmail="",shuffledQ=[],answers={},timerInt=null,secondsLeft=EXAM_DURATION_SECONDS,examSubmitted=false,examEndTime=0;
+let studentName="",studentFirstName="",studentLastName="",studentPTIN="",studentEmail="",shuffledQ=[],answers={},timerInt=null,secondsLeft=EXAM_DURATION_SECONDS,examSubmitted=false,examEndTime=0;
 const SESSION_PREFIX="AFTR_SESSION_",CURRENT_KEY="AFTR_CURRENT";
 
 function shuffle(arr){const a=[...arr];for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]]}return a}
@@ -420,7 +432,7 @@ function sessionKey(email){return SESSION_PREFIX+email}
 function saveSession(){
   if(!studentEmail)return;
   try{localStorage.setItem(sessionKey(studentEmail),JSON.stringify({
-    name:studentName,ptin:studentPTIN,email:studentEmail,endTime:examEndTime,
+    name:studentName,firstName:studentFirstName,lastName:studentLastName,ptin:studentPTIN,email:studentEmail,endTime:examEndTime,
     questions:shuffledQ,answers:answers,submitted:examSubmitted
   }));}catch(e){}
 }
@@ -432,7 +444,7 @@ function showLocked(){
   const td=document.getElementById('timer-display');td.style.display='none';td.className='';
 }
 function resumeSession(s){
-  studentName=s.name;studentPTIN=s.ptin;studentEmail=s.email||studentEmail;shuffledQ=s.questions||[];answers=s.answers||{};
+  studentName=s.name;studentFirstName=s.firstName||studentName;studentLastName=s.lastName||"";studentPTIN=s.ptin;studentEmail=s.email||studentEmail;shuffledQ=s.questions||[];answers=s.answers||{};
   examEndTime=s.endTime;examSubmitted=false;
   document.getElementById('display-name').textContent=studentName;
   document.getElementById('display-ptin').textContent=studentPTIN;
@@ -453,12 +465,15 @@ window.addEventListener('DOMContentLoaded',()=>{
 });
 
 async function startExam(){
-  const nEl=document.getElementById('input-name'),pEl=document.getElementById('input-ptin');
-  studentName=nEl.value.trim();studentPTIN=pEl.value.trim().toUpperCase();
+  const fEl=document.getElementById('input-first-name'),lEl=document.getElementById('input-last-name'),pEl=document.getElementById('input-ptin');
+  studentFirstName=fEl.value.trim();studentLastName=lEl.value.trim();
+  studentName=(studentFirstName+' '+studentLastName).trim();
+  studentPTIN=pEl.value.trim().toUpperCase();
   studentEmail=window.__AFTR_EMAIL__||"";
-  nEl.classList.remove('error');pEl.classList.remove('error');
+  fEl.classList.remove('error');lEl.classList.remove('error');pEl.classList.remove('error');
   let ok=true;
-  if(!studentName){nEl.classList.add('error');ok=false}
+  if(!studentFirstName){fEl.classList.add('error');ok=false}
+  if(!studentLastName){lEl.classList.add('error');ok=false}
   if(!studentPTIN){pEl.classList.add('error');ok=false}
   if(!studentEmail){window.__AFTR_BLOCK__();return;}
   if(!ok)return;
@@ -577,7 +592,7 @@ function submitExam(){
   saveSession();                       // records submitted:true → no second attempt
   localStorage.removeItem(CURRENT_KEY);
   showResults(pct,passed,correct,total,timeUsed,dateStr);
-  sendToSheets(studentName,studentPTIN,studentEmail,pct,passed?'PASSED':'FAILED',correct,total,timeUsed,dateStr);
+  sendToSheets(studentFirstName,studentLastName,studentPTIN,studentEmail,pct,passed?'PASSED':'FAILED',correct,total,timeUsed,dateStr);
 }
 
 function showResults(pct,passed,correct,total,timeUsed,dateStr){
@@ -635,6 +650,7 @@ async function generateCertificate(){
 
   document.getElementById('cert-name').textContent=studentName;
   document.getElementById('cert-course').textContent=info.course_name;
+  document.getElementById('cert-program-number').textContent=PROGRAM_NUMBER||"—";
   document.getElementById('cert-hours').textContent=info.ce_hours;
   document.getElementById('cert-format').textContent=info.format;
   document.getElementById('cert-validfor').textContent=info.valid_for;
@@ -676,8 +692,21 @@ async function generateCertificate(){
   btn.disabled=false;btn.textContent='Descargar mi Certificado (PDF)';
 }
 
-function sendToSheets(name,ptin,email,score,status,correct,total,timeUsed,dateStr){
-  const p=new URLSearchParams({name,ptin,email,score,status,correct,total,timeUsed,date:dateStr});
+function sendToSheets(firstName,lastName,ptin,email,score,status,correct,total,timeUsed,dateStr){
+  const now=new Date();
+  const completionDate=`${String(now.getMonth()+1).padStart(2,'0')}/${String(now.getDate()).padStart(2,'0')}/${now.getFullYear()}`;
+  const p=new URLSearchParams({
+    firstName,lastName,ptin,
+    programNumber:PROGRAM_NUMBER,
+    // CE hours are only meaningfully "awarded" on a pass; leave blank on a fail so the
+    // sheet still shows a row (attempt on record) without implying hours were granted.
+    ceHours:status==='PASSED'?AFTR_CERT_INFO.ce_hours:'',
+    completionDate,
+    email,
+    score,status,
+    // extra fields kept for your own records / troubleshooting, ignored by the sheet script below
+    correct,total,timeUsed
+  });
   fetch(`${GOOGLE_SCRIPT_URL}?${p}`,{method:'GET',mode:'no-cors'});
 }
 
@@ -699,15 +728,24 @@ document.addEventListener('keydown',e=>{
   GOOGLE SHEETS SETUP (one-time, ~5 minutes)
 ════════════════════════════════════════════════════════
 
-1. Open Google Sheets → Create new spreadsheet
-   Row 1 headers: Date | Name | PTIN | Score (%) | Status | Correct | Total | Time Used
+1. Open your "CE_ptin_hours_upload" spreadsheet (row 1 headers already match):
+   Attendee First Name | Attendee Last Name | Attendee PTIN | Program Number | CE Hours Awarded | Program Completion Date | Email | Score | Status
 
 2. Go to Extensions → Apps Script → Paste this code:
 
 function doGet(e) {
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
   const p = e.parameter;
-  sheet.appendRow([p.date, p.name, p.ptin, p.score + '%', p.status, p.correct, p.total, p.timeUsed]);
+  if (p.checkEmail) {
+    const data = sheet.getDataRange().getValues();
+    const emailCol = 6; // column G (0-indexed) = Email
+    const completed = data.some((row, i) => i > 0 && row[emailCol] === p.checkEmail);
+    return ContentService.createTextOutput(JSON.stringify({completed}))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+  // Every submitted attempt (pass or fail) is sent here — the sheet doubles as
+  // the record of who has already taken the exam. CE Hours is blank on a fail.
+  sheet.appendRow([p.firstName, p.lastName, p.ptin, p.programNumber, p.ceHours, p.completionDate, p.email, p.score + '%', p.status]);
   return ContentService.createTextOutput('OK');
 }
 
