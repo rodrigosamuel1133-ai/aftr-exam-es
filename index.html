@@ -35,6 +35,8 @@
   .btn-primary{width:100%;padding:13px;background:var(--navy);color:#fff;border:none;border-radius:10px;font-size:15px;font-weight:600;cursor:pointer;font-family:'Inter',sans-serif;margin-top:6px;transition:background .2s}
   .btn-primary:hover{background:var(--navy2)}
   .info-box{background:var(--g100);border-left:3px solid var(--gold);border-radius:8px;padding:13px 15px;margin-top:22px;font-size:12px;color:var(--g700);line-height:1.65}
+  .disclaimer-box{background:#FDF6E9;border-left:3px solid var(--red);border-radius:8px;padding:11px 14px;margin:2px 0 18px;font-size:11.5px;color:var(--g700);line-height:1.55}
+  .field-hint{font-size:11px;color:var(--g400);margin:6px 0 0 2px;line-height:1.4}
   .info-box strong{color:var(--navy)}
   /* EXAM */
   #screen-exam{max-width:780px;margin:0 auto;padding:28px 20px 60px}
@@ -176,15 +178,19 @@
     <div class="card-sub">Repaso Fiscal Federal Anual (AFTR) — 100 Preguntas<br>Por favor ingrese su información para comenzar el examen.</div>
     <div class="field">
       <label>Nombre</label>
-      <input type="text" id="input-first-name" placeholder="ej. Maria" autocomplete="off">
+      <input type="text" id="input-first-name" placeholder="ej. Maria" autocomplete="off" oninput="this.value=this.value.replace(/[^A-Za-zÀ-ÖØ-öø-ÿ\s]/g,'')">
     </div>
     <div class="field">
       <label>Apellido</label>
-      <input type="text" id="input-last-name" placeholder="ej. Gonzalez" autocomplete="off">
+      <input type="text" id="input-last-name" placeholder="ej. Gonzalez" autocomplete="off" oninput="this.value=this.value.replace(/[^A-Za-zÀ-ÖØ-öø-ÿ\s]/g,'')">
+    </div>
+    <div class="disclaimer-box">
+      Importante: escriba su nombre y apellido exactamente como aparecen en su Número de Seguro Social (SSN), para evitar cualquier inconsistencia en su certificado y registros oficiales. JoseTaxes.com no se hace responsable por información ingresada de forma incorrecta o incompleta.
     </div>
     <div class="field">
       <label>Número de PTIN</label>
-      <input type="text" id="input-ptin" placeholder="ej. P12345678" autocomplete="off" style="font-family:'IBM Plex Mono',monospace">
+      <input type="text" id="input-ptin" placeholder="ej. P12345678" autocomplete="off" inputmode="numeric" maxlength="9" style="font-family:'IBM Plex Mono',monospace" oninput="formatPTIN(this)">
+      <div class="field-hint">* La "P" se completa automáticamente. Solo debe escribir los 8 números de su PTIN.</div>
     </div>
     <button class="btn-primary" onclick="startExam()">Comenzar Examen →</button>
     <div class="info-box">
@@ -439,6 +445,12 @@ function saveSession(){
 function loadSession(email){
   try{const raw=localStorage.getItem(sessionKey(email));return raw?JSON.parse(raw):null;}catch(e){return null;}
 }
+// Formats the PTIN input live: keeps only digits, caps at 8, and prefixes with "P".
+// The field ends up empty if the user hasn't typed any digits yet.
+function formatPTIN(el){
+  const digits=el.value.replace(/[^0-9]/g,'').slice(0,8);
+  el.value=digits.length?'P'+digits:'';
+}
 function showLocked(){
   showScreen('screen-locked');window.scrollTo(0,0);
   const td=document.getElementById('timer-display');td.style.display='none';td.className='';
@@ -472,9 +484,11 @@ async function startExam(){
   studentEmail=window.__AFTR_EMAIL__||"";
   fEl.classList.remove('error');lEl.classList.remove('error');pEl.classList.remove('error');
   let ok=true;
-  if(!studentFirstName){fEl.classList.add('error');ok=false}
-  if(!studentLastName){lEl.classList.add('error');ok=false}
-  if(!studentPTIN){pEl.classList.add('error');ok=false}
+  const nameRe=/^[A-Za-zÀ-ÖØ-öø-ÿ\s]+$/;
+  if(!studentFirstName||!nameRe.test(studentFirstName)){fEl.classList.add('error');ok=false}
+  if(!studentLastName||!nameRe.test(studentLastName)){lEl.classList.add('error');ok=false}
+  // PTIN must be exactly "P" followed by 8 digits — no more, no less.
+  if(!/^P\d{8}$/.test(studentPTIN)){pEl.classList.add('error');ok=false}
   if(!studentEmail){window.__AFTR_BLOCK__();return;}
   if(!ok)return;
   // Single-attempt enforcement — keyed by the verified Thinkific email, not the typed PTIN.
@@ -630,7 +644,7 @@ const AFTR_CERT_INFO = {
   ce_hours: "6",
   format: "100% Online",
   valid_for: "2026 Filing Season",
-  language: "ES",
+  language: "EN",
   valid_through: "12/31/2026",
   instructor_name: "Jose Barrientos",
   instructor_role: "Training Provider · JOSETAXES.COM",
