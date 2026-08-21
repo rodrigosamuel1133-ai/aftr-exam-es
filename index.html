@@ -92,7 +92,7 @@
     body *{visibility:hidden !important}
     body::before{content:"Printing this examination is not permitted.";visibility:visible;position:fixed;top:40%;left:0;right:0;text-align:center;font-size:22px;font-weight:700;color:#082D57;font-family:'Inter',sans-serif}
   }
-  /* LOCKED SCREEN (attempt already used) */
+  /* LOCKED SCREEN (attempt limit reached) */
   #screen-locked{max-width:520px;margin:60px auto;padding:0 20px;text-align:center}
   /* --- CERTIFICATE (used only to render the PDF, kept off-screen) --- */
   #certificate-render-area{position:fixed;top:-20000px;left:-20000px}
@@ -195,7 +195,7 @@
     <button class="btn-primary" onclick="startExam()">Comenzar Examen →</button>
     <div class="info-box">
       <strong>Por favor lea cuidadosamente antes de comenzar:</strong><br>
-      • Tiene <strong>UN SOLO intento</strong>. Una vez que el examen comienza, no se puede reiniciar ni volver a tomar.<br>
+      • Tiene un máximo de <strong>DOS intentos</strong>. Cada intento que comience no se puede reiniciar.<br>
       • El <strong>cronómetro de 3 horas comienza inmediatamente</strong> al hacer clic en Comenzar y <strong>cuenta regresivamente sin interrupción</strong>. <strong>No se pausa ni se detiene</strong> si sale de la página, cambia de pestaña, cierra el navegador, o permanece inactivo.<br>
       • <strong>100 preguntas</strong> presentadas en orden aleatorio &nbsp;·&nbsp; se requiere <strong>70%</strong> para aprobar.<br>
       • Una vez enviado, sus respuestas no se pueden cambiar. No está permitido copiar ni imprimir el examen.
@@ -281,8 +281,8 @@
 </div>
 <div id="screen-locked" class="screen">
   <div class="card">
-    <div class="card-title">Examen Ya Completado</div>
-    <div class="card-sub" id="locked-msg" style="margin-bottom:0">Nuestros registros muestran que esta cuenta de Thinkific ya completó el Examen Final AFTR. Solo se permite <strong>un intento</strong> por cuenta, por lo que el examen no se puede volver a tomar.</div>
+    <div class="card-title">Límite de Intentos Alcanzado</div>
+    <div class="card-sub" id="locked-msg" style="margin-bottom:0">Nuestros registros muestran que esta cuenta de Thinkific ya tiene <strong>dos intentos</strong> para este número de curso. Solo se permiten <strong>dos intentos</strong>, por lo que el examen no se puede volver a tomar.</div>
   </div>
 </div>
 
@@ -304,6 +304,7 @@
 // ══════════════════════════════════════════════════════
 const EXAM_DURATION_SECONDS = 3 * 60 * 60;
 const PASS_THRESHOLD = 70;
+const MAX_ATTEMPTS = 2;
 
 // ⚠️ Replace with your Google Apps Script Web App URL
 const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzQgNTX6Xsyp_eGzWdHPrcmqrBMJRlMw_1TqfyV30uDhbWVn48IWo3NvKwqENIEUnxNkw/exec";
@@ -424,21 +425,26 @@ const QUESTION_BANK = [
 // ══════════════════════════════════════════════════════
 //  STATE
 // ══════════════════════════════════════════════════════
-let studentName="",studentFirstName="",studentLastName="",studentPTIN="",studentEmail="",shuffledQ=[],answers={},timerInt=null,secondsLeft=EXAM_DURATION_SECONDS,examSubmitted=false,examEndTime=0;
-const SESSION_PREFIX="AFTR_SESSION_",CURRENT_KEY="AFTR_CURRENT";
+let studentName="",studentFirstName="",studentLastName="",studentPTIN="",studentEmail="",shuffledQ=[],answers={},timerInt=null,secondsLeft=EXAM_DURATION_SECONDS,examSubmitted=false,examEndTime=0,currentAttemptNumber=0,pendingAttemptNumber=0;
+const SESSION_PREFIX="AFTR_SESSION_V2_",CURRENT_KEY_PREFIX="AFTR_CURRENT_V2_";
 
 function shuffle(arr){const a=[...arr];for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]]}return a}
 function formatTime(s){const h=Math.floor(s/3600),m=Math.floor((s%3600)/60),sc=s%60;return`${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(sc).padStart(2,'0')}`}
 function formatUsed(s){const u=EXAM_DURATION_SECONDS-s,h=Math.floor(u/3600),m=Math.floor((u%3600)/60),sc=u%60;return h>0?`${h}h ${m}m ${sc}s`:m>0?`${m}m ${sc}s`:`${sc}s`}
 function showScreen(id){document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));document.getElementById(id).classList.add('active')}
 
-// ── Single-attempt persistence, keyed by the verified Thinkific account email ──
-// (not the PTIN — a typed PTIN can be changed by the student, the Thinkific login email cannot)
-function sessionKey(email){return SESSION_PREFIX+email}
+// ── Attempt persistence, keyed by verified Thinkific email + course number ──
+// (not the PTIN — a typed PTIN can be changed by the student)
+function examIdentityKey(email){
+  return encodeURIComponent((email||'').trim().toLowerCase())+'_'+encodeURIComponent(PROGRAM_NUMBER.trim().toUpperCase());
+}
+function sessionKey(email){return SESSION_PREFIX+examIdentityKey(email)}
+function currentKey(email){return CURRENT_KEY_PREFIX+examIdentityKey(email)}
 function saveSession(){
   if(!studentEmail)return;
   try{localStorage.setItem(sessionKey(studentEmail),JSON.stringify({
     name:studentName,firstName:studentFirstName,lastName:studentLastName,ptin:studentPTIN,email:studentEmail,endTime:examEndTime,
+    programNumber:PROGRAM_NUMBER,attemptNumber:currentAttemptNumber,
     questions:shuffledQ,answers:answers,submitted:examSubmitted
   }));}catch(e){}
 }
@@ -455,9 +461,15 @@ function showLocked(){
   showScreen('screen-locked');window.scrollTo(0,0);
   const td=document.getElementById('timer-display');td.style.display='none';td.className='';
 }
+function showVerificationError(message){
+  document.getElementById('modal-title').textContent='No se pudo verificar el acceso';
+  document.getElementById('modal-body').textContent=message;
+  document.querySelector('.modal-btns').innerHTML='<button class="btn-confirm" onclick="closeModal()">Volver e intentar</button>';
+  document.getElementById('modal').classList.add('open');
+}
 function resumeSession(s){
   studentName=s.name;studentFirstName=s.firstName||studentName;studentLastName=s.lastName||"";studentPTIN=s.ptin;studentEmail=s.email||studentEmail;shuffledQ=s.questions||[];answers=s.answers||{};
-  examEndTime=s.endTime;examSubmitted=false;
+  examEndTime=s.endTime;examSubmitted=false;currentAttemptNumber=Number(s.attemptNumber)||1;
   document.getElementById('display-name').textContent=studentName;
   document.getElementById('display-ptin').textContent=studentPTIN;
   renderQuestions();
@@ -472,8 +484,14 @@ function resumeSession(s){
 }
 // On load, if an unfinished attempt exists, resume it so the clock keeps counting down.
 window.addEventListener('DOMContentLoaded',()=>{
-  const cur=localStorage.getItem(CURRENT_KEY);
-  if(cur){const s=loadSession(cur);if(s&&!s.submitted){resumeSession(s);}}
+  const email=window.__AFTR_EMAIL__||"";
+  if(!email||!PROGRAM_NUMBER)return;
+  const key=currentKey(email);
+  if(localStorage.getItem(key)){
+    const s=loadSession(email);
+    if(s&&!s.submitted){resumeSession(s);}
+    else{localStorage.removeItem(key);}
+  }
 });
 
 async function startExam(){
@@ -491,31 +509,69 @@ async function startExam(){
   if(!/^P\d{8}$/.test(studentPTIN)){pEl.classList.add('error');ok=false}
   if(!studentEmail){window.__AFTR_BLOCK__();return;}
   if(!ok)return;
-  // Single-attempt enforcement — keyed by the verified Thinkific email, not the typed PTIN.
+  if(!PROGRAM_NUMBER){
+    showVerificationError('No se encontró el número del curso. No se inició el examen. Revise la configuración del enlace del curso e intente nuevamente.');
+    return;
+  }
+  // If this exact email + course has an unfinished attempt, resume it without
+  // restarting the clock. A submitted local record is used only as a safeguard
+  // while the newest Sheet row finishes registering.
   const existing=loadSession(studentEmail);
-  if(existing){
-    if(existing.submitted){showLocked();return;}
-    // An unfinished attempt exists for this account — resume it, do NOT restart the clock.
-    localStorage.setItem(CURRENT_KEY,studentEmail);
+  if(existing&&!existing.submitted){
+    localStorage.setItem(currentKey(studentEmail),'1');
     resumeSession(existing);return;
   }
-  // No local record on this browser (e.g. incognito, a different device) — ask the
-  // server (Google Sheet) whether this email already has a completed exam on file.
+  const localCompletedAttempts=existing&&existing.submitted
+    ? Math.max(1,Number(existing.attemptNumber)||1)
+    : 0;
+
+  // Always ask the Google Sheet for the number of rows matching BOTH the verified
+  // Thinkific email and the course program number. This also protects incognito
+  // windows and different devices.
   const startBtn=document.querySelector('#screen-register .btn-primary');
   const startBtnOriginalText=startBtn?startBtn.textContent:'';
   if(startBtn){startBtn.disabled=true;startBtn.textContent='Verificando...';}
   try{
-    const res=await fetch(`${GOOGLE_SCRIPT_URL}?checkEmail=${encodeURIComponent(studentEmail)}`);
+    const query=new URLSearchParams({
+      action:'checkAttempts',
+      email:studentEmail,
+      programNumber:PROGRAM_NUMBER,
+      _:String(Date.now())
+    });
+    const res=await fetch(`${GOOGLE_SCRIPT_URL}?${query}`,{cache:'no-store'});
+    if(!res.ok)throw new Error('HTTP '+res.status);
     const data=await res.json();
-    if(data && data.completed){
-      if(startBtn){startBtn.disabled=false;startBtn.textContent=startBtnOriginalText;}
-      showLocked();return;
-    }
+    const sheetAttempts=Number(data&&data.attemptCount);
+    if(!data||data.ok!==true||!Number.isInteger(sheetAttempts)||sheetAttempts<0)throw new Error('Invalid response');
+    const attemptCount=Math.max(sheetAttempts,localCompletedAttempts);
+    if(startBtn){startBtn.disabled=false;startBtn.textContent=startBtnOriginalText;}
+    if(attemptCount>=MAX_ATTEMPTS){showLocked();return;}
+    if(attemptCount===1){showLastAttemptWarning();return;}
+    beginNewAttempt(1);return;
   }catch(e){
-    // If the check itself fails (network hiccup), fail open rather than blocking a
-    // legitimate student — the local single-attempt check above still applies.
+    if(startBtn){startBtn.disabled=false;startBtn.textContent=startBtnOriginalText;}
+    showVerificationError('No fue posible consultar los intentos registrados en este momento. Por seguridad, el examen no se inició. Revise su conexión e intente nuevamente.');
+    return;
   }
-  if(startBtn){startBtn.disabled=false;startBtn.textContent=startBtnOriginalText;}
+}
+
+function showLastAttemptWarning(){
+  pendingAttemptNumber=2;
+  document.getElementById('modal-title').textContent='Aviso: último intento';
+  document.getElementById('modal-body').textContent='Solo se permiten dos intentos para este examen. Ya tiene un intento registrado y este será su último intento. ¿Desea comenzar?';
+  document.querySelector('.modal-btns').innerHTML='<button class="btn-cancel" onclick="closeModal()">Cancelar</button><button class="btn-confirm" onclick="beginPendingAttempt()">Comenzar último intento</button>';
+  document.getElementById('modal').classList.add('open');
+}
+
+function beginPendingAttempt(){
+  const attemptNumber=pendingAttemptNumber;
+  pendingAttemptNumber=0;
+  closeModal();
+  if(attemptNumber===2)beginNewAttempt(attemptNumber);
+}
+
+function beginNewAttempt(attemptNumber){
+  currentAttemptNumber=attemptNumber;
   document.getElementById('display-name').textContent=studentName;
   document.getElementById('display-ptin').textContent=studentPTIN;
   shuffledQ=shuffle(QUESTION_BANK).map(q=>{
@@ -525,7 +581,7 @@ async function startExam(){
   });
   answers={};examSubmitted=false;
   examEndTime=Date.now()+EXAM_DURATION_SECONDS*1000;   // fixed wall-clock deadline
-  localStorage.setItem(CURRENT_KEY,studentPTIN);saveSession();
+  localStorage.setItem(currentKey(studentEmail),'1');saveSession();
   renderQuestions();showScreen('screen-exam');startTimer();window.scrollTo(0,0);
 }
 
@@ -603,8 +659,8 @@ function submitExam(){
   const total=shuffledQ.length,pct=Math.round((correct/total)*100),passed=pct>=PASS_THRESHOLD,
         timeUsed=formatUsed(secondsLeft),now=new Date(),
         dateStr=now.toLocaleDateString('en-US',{year:'numeric',month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
-  saveSession();                       // records submitted:true → no second attempt
-  localStorage.removeItem(CURRENT_KEY);
+  saveSession();                       // keeps the completed attempt number as a local safeguard
+  localStorage.removeItem(currentKey(studentEmail));
   showResults(pct,passed,correct,total,timeUsed,dateStr);
   sendToSheets(studentFirstName,studentLastName,studentPTIN,studentEmail,pct,passed?'PASSED':'FAILED',correct,total,timeUsed,dateStr);
 }
@@ -710,6 +766,7 @@ function sendToSheets(firstName,lastName,ptin,email,score,status,correct,total,t
   const now=new Date();
   const completionDate=`${String(now.getMonth()+1).padStart(2,'0')}/${String(now.getDate()).padStart(2,'0')}/${now.getFullYear()}`;
   const p=new URLSearchParams({
+    action:'recordAttempt',
     firstName,lastName,ptin,
     programNumber:PROGRAM_NUMBER,
     // CE hours are only meaningfully "awarded" on a pass; leave blank on a fail so the
@@ -747,20 +804,98 @@ document.addEventListener('keydown',e=>{
 
 2. Go to Extensions → Apps Script → Paste this code:
 
+const MAX_ATTEMPTS = 2;
+
 function doGet(e) {
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
-  const p = e.parameter;
-  if (p.checkEmail) {
-    const data = sheet.getDataRange().getValues();
-    const emailCol = 6; // column G (0-indexed) = Email
-    const completed = data.some((row, i) => i > 0 && row[emailCol] === p.checkEmail);
-    return ContentService.createTextOutput(JSON.stringify({completed}))
-      .setMimeType(ContentService.MimeType.JSON);
+  const p = e.parameter || {};
+  const action = p.action || (p.checkEmail ? 'checkAttempts' : 'recordAttempt');
+  const email = normalizeEmail_(p.email || p.checkEmail || '');
+  const programNumber = normalizeProgram_(p.programNumber || '');
+
+  if (!email || !programNumber) {
+    return json_({ok:false, error:'MISSING_EMAIL_OR_PROGRAM_NUMBER'});
   }
-  // Every submitted attempt (pass or fail) is sent here — the sheet doubles as
-  // the record of who has already taken the exam. CE Hours is blank on a fail.
-  sheet.appendRow([p.firstName, p.lastName, p.ptin, p.programNumber, p.ceHours, p.completionDate, p.email, p.score + '%', p.status]);
-  return ContentService.createTextOutput('OK');
+
+  if (action === 'checkAttempts') {
+    const attemptCount = countAttempts_(sheet, email, programNumber);
+    return json_({
+      ok:true,
+      attemptCount:attemptCount,
+      maxAttempts:MAX_ATTEMPTS,
+      allowed:attemptCount < MAX_ATTEMPTS
+    });
+  }
+
+  if (action !== 'recordAttempt') {
+    return json_({ok:false, error:'INVALID_ACTION'});
+  }
+
+  // The lock prevents two nearly simultaneous submissions from creating a
+  // third row for the same email + course number.
+  const lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    const attemptCount = countAttempts_(sheet, email, programNumber);
+    if (attemptCount >= MAX_ATTEMPTS) {
+      return json_({
+        ok:false,
+        recorded:false,
+        error:'ATTEMPT_LIMIT_REACHED',
+        attemptCount:attemptCount,
+        maxAttempts:MAX_ATTEMPTS
+      });
+    }
+
+    // Every submitted attempt (pass or fail) becomes one row. CE Hours remains
+    // blank on a failed attempt because no hours were awarded.
+    sheet.appendRow([
+      p.firstName || '',
+      p.lastName || '',
+      p.ptin || '',
+      p.programNumber || '',
+      p.ceHours || '',
+      p.completionDate || '',
+      p.email || '',
+      (p.score || '') + '%',
+      p.status || ''
+    ]);
+
+    return json_({
+      ok:true,
+      recorded:true,
+      attemptCount:attemptCount + 1,
+      maxAttempts:MAX_ATTEMPTS
+    });
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function countAttempts_(sheet, email, programNumber) {
+  const data = sheet.getDataRange().getDisplayValues();
+  const programNumberCol = 3; // column D (0-indexed) = Program Number
+  const emailCol = 6;         // column G (0-indexed) = Email
+
+  return data.reduce(function(total, row, index) {
+    if (index === 0) return total; // ignore header row
+    const sameEmail = normalizeEmail_(row[emailCol]) === email;
+    const sameProgram = normalizeProgram_(row[programNumberCol]) === programNumber;
+    return total + (sameEmail && sameProgram ? 1 : 0);
+  }, 0);
+}
+
+function normalizeEmail_(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function normalizeProgram_(value) {
+  return String(value || '').trim().toUpperCase();
+}
+
+function json_(payload) {
+  return ContentService.createTextOutput(JSON.stringify(payload))
+    .setMimeType(ContentService.MimeType.JSON);
 }
 
 3. Click Deploy → New Deployment → Web App
